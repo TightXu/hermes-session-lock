@@ -1,0 +1,7 @@
+{
+  "name": "session-lock",
+  "label": "Session Lock",
+  "description": "List and release Hermes active-session leases (the \"This chat is open somewhere else\" lock).",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}
