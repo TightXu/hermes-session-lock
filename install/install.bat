@@ -17,7 +17,8 @@ if not exist "%DESK%\plugin.js" goto :nopayload
 
 rem ---------- 1. find the Hermes home ----------
 set "HH=%HERMES_HOME%"
-if not "%HH%"=="" goto :havehh
+if not "%HH%"=="" if exist "%HH%\config.yaml" goto :havehh
+set "HH="
 if exist "%LOCALAPPDATA%\hermes\config.yaml" set "HH=%LOCALAPPDATA%\hermes"
 if not "%HH%"=="" goto :havehh
 if exist "%USERPROFILE%\.hermes\config.yaml" set "HH=%USERPROFILE%\.hermes"
@@ -26,19 +27,9 @@ if "%HH%"=="" goto :nohh
 if not exist "%HH%\config.yaml" goto :nohh
 
 echo [1/4] Hermes home : %HH%
-if exist "%HH%\hermes-agent\hermes_cli\active_sessions.py" (
-  echo       lease registry: found
-) else (
-  if exist "%HH%\runtime" (
-    echo       lease registry: runtime folder present
-  ) else (
-    echo       WARNING: neither hermes-agent\hermes_cli\active_sessions.py nor a
-    echo                runtime folder was found - this Hermes build may not have
-    echo                session locks at all. Continuing anyway.
-  )
-)
+echo.
 
-rem ---------- 2. copy the plugin halves ----------
+rem ---------- 2. copy the plugin halves (idempotent) ----------
 echo [2/4] Copying plugin files...
 if not exist "%HH%\plugins" mkdir "%HH%\plugins" 2>nul
 if not exist "%HH%\plugins\session-lock" mkdir "%HH%\plugins\session-lock" 2>nul
@@ -46,86 +37,68 @@ if not exist "%HH%\plugins\session-lock\dashboard" mkdir "%HH%\plugins\session-l
 if not exist "%HH%\desktop-plugins" mkdir "%HH%\desktop-plugins" 2>nul
 if not exist "%HH%\desktop-plugins\session-lock" mkdir "%HH%\desktop-plugins\session-lock" 2>nul
 
+if exist "%HH%\plugins\session-lock\dashboard\plugin_api.py" copy /Y "%HH%\plugins\session-lock\dashboard\plugin_api.py" "%HH%\plugins\session-lock\dashboard\plugin_api.py.bak-installer" >nul 2>nul
+if exist "%HH%\plugins\session-lock\dashboard\manifest.json" copy /Y "%HH%\plugins\session-lock\dashboard\manifest.json" "%HH%\plugins\session-lock\dashboard\manifest.json.bak-installer" >nul 2>nul
+if exist "%HH%\desktop-plugins\session-lock\plugin.js" copy /Y "%HH%\desktop-plugins\session-lock\plugin.js" "%HH%\desktop-plugins\session-lock\plugin.js.bak-installer" >nul 2>nul
+
 copy /Y "%DASH%\plugin_api.py" "%HH%\plugins\session-lock\dashboard\plugin_api.py" >nul || goto :copyfail
-copy /Y "%DASH%\manifest.json"  "%HH%\plugins\session-lock\dashboard\manifest.json"  >nul || goto :copyfail
-copy /Y "%DESK%\plugin.js"      "%HH%\desktop-plugins\session-lock\plugin.js"       >nul || goto :copyfail
+copy /Y "%DASH%\manifest.json" "%HH%\plugins\session-lock\dashboard\manifest.json" >nul || goto :copyfail
+copy /Y "%DESK%\plugin.js" "%HH%\desktop-plugins\session-lock\plugin.js" >nul || goto :copyfail
+if exist "%HH%\plugins\session-lock\dashboard\__pycache__" rd /S /Q "%HH%\plugins\session-lock\dashboard\__pycache__" 2>nul
 echo       %HH%\plugins\session-lock\dashboard\plugin_api.py
+echo       %HH%\plugins\session-lock\dashboard\manifest.json
 echo       %HH%\desktop-plugins\session-lock\plugin.js
+echo.
 
 rem ---------- 3. enable the Python half ----------
-echo [3/4] Enabling the backend half (plugins.enabled)...
-where hermes >nul 2>nul
-if errorlevel 1 goto :nohermes
+echo [3/4] Enabling plugins.enabled...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\install\setup_config.ps1" -Mode install -HermesHome "%HH%"
+if errorlevel 1 goto :configfail
+echo.
 
-hermes config get plugins.enabled 2>nul | findstr /C:"session-lock" >nul
-if not errorlevel 1 (
-  echo       already listed in plugins.enabled - nothing to do
-  goto :enabled
-)
-hermes config get plugins.enabled 2>nul | findstr /R /C:"^  *-" >nul
-if not errorlevel 1 (
-  echo       WARNING: plugins.enabled already has other entries. Not touching it.
-  echo       Add this plugin yourself in PowerShell, then re-run:
-  echo           hermes config set plugins.enabled '[... existing ..., "session-lock"]'
-  goto :enabled
-)
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$q=[char]34; $v='['+$q+'session-lock'+$q+']'; & hermes config set plugins.enabled $v" >nul 2>nul
-if errorlevel 1 goto :enablefail
-hermes config get plugins.enabled 2>nul | findstr /C:"session-lock" >nul
-if errorlevel 1 goto :enablefail
-echo       enabled
-
-:enabled
 rem ---------- 4. report ----------
 echo [4/4] Done.
 echo.
-for /f "delims=" %%V in ('hermes --version 2^>nul') do echo   %%V
+where hermes >nul 2>nul
+if not errorlevel 1 for /f "delims=" %%V in ('hermes --version 2^>nul') do echo   %%V
 echo.
 echo   NEXT STEPS
-echo   1. If the Hermes desktop app is running, press Ctrl+K and run
-echo      "Reload desktop plugins" (a plugin that failed its first load is
-echo      not retried by the folder watcher).
-echo   2. Look at the bottom-right status bar for a chip that reads
-echo      "lock N" (the character for lock, then a number).
-echo   3. Click it: every active session lease is listed, with buttons to
-echo      release one, only the dead ones, or all of them.
+echo   1. If Hermes is running, press Ctrl+K and run "Reload desktop plugins".
+echo   2. Look for a "Locks" chip in the status bar.
+echo      Click it to see and release session leases.
+echo   3. If the chip says the backend is unavailable, restart Hermes once;
+echo      a build without the dashboard plugin mount cannot serve /leases.
 echo.
-echo   The backend route is /api/plugins/session-lock/leases . If the dialog
-echo   says the backend is unavailable, restart the app once and try again.
+echo   This installer only changed plugins.enabled and these two plugin
+echo   folders. It did not touch .env, session data or the lease registry.
 echo.
-pause
+if not defined SESSION_LOCK_NO_PAUSE pause
 exit /b 0
 
 :nopayload
 echo [X] dashboard\ or desktop\ folder missing next to the install\ folder.
-echo     Run this from a full checkout / extracted archive of the repo.
-pause
+echo     Extract the whole archive first, then run install\install.bat.
+if not defined SESSION_LOCK_NO_PAUSE pause
 exit /b 1
 
 :nohh
-echo [X] Could not find Hermes home (looked at HERMES_HOME, %%LOCALAPPDATA%%\hermes,
-echo     %%USERPROFILE%%\.hermes - none had config.yaml).
-echo     If Hermes lives elsewhere, close this window and run:
+echo [X] Could not find Hermes home (looked at HERMES_HOME,
+echo     %%LOCALAPPDATA%%\hermes, %%USERPROFILE%%\.hermes - none had config.yaml).
+echo     If Hermes lives elsewhere, run this from cmd:
 echo         set HERMES_HOME=D:\path\to\hermes
 echo         install\install.bat
-pause
+if not defined SESSION_LOCK_NO_PAUSE pause
 exit /b 1
 
 :copyfail
-echo [X] Copy failed. Close the Hermes desktop app and re-run this installer.
-pause
+echo [X] Copy failed. Close the Hermes desktop app and re-run.
+if not defined SESSION_LOCK_NO_PAUSE pause
 exit /b 1
 
-:nohermes
-echo [X] "hermes" is not on PATH, so the backend half cannot be enabled
-echo     automatically. The files are already copied. Run this once in
-echo     PowerShell:
-echo         hermes config set plugins.enabled '["session-lock"]'
-pause
-exit /b 1
-
-:enablefail
-echo [X] Could not write plugins.enabled. Run this by hand in PowerShell:
-echo         hermes config set plugins.enabled '["session-lock"]'
-pause
+:configfail
+echo [X] Could not update plugins.enabled automatically.
+echo     Add "session-lock" under plugins.enabled in:
+echo         %HH%\config.yaml
+echo     A backup of config.yaml is written before any edit.
+if not defined SESSION_LOCK_NO_PAUSE pause
 exit /b 1

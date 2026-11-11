@@ -49,6 +49,8 @@ const MESSAGES = {
       'The "This chat is open somewhere else" refusal comes from an entry in this list. Remove one and any device or platform can take that session again.',
     loading: 'Loading…',
     empty: 'No session locks right now',
+    untitled: 'Untitled session',
+    sessionId: id => `ID ${id}`,
     from: surface => `from ${surface}`,
     pid: pid => `pid ${pid}`,
     ageSeconds: n => `${n}s ago`,
@@ -72,11 +74,12 @@ const MESSAGES = {
     confirmAllBody:
       'This deletes every lease, whichever device or platform created it. If an owner process is still alive (another computer has this chat open, for example), both clients can write the same conversation afterwards.',
     confirmAllLabel: 'Release all',
-    confirmAliveTitle: 'Release a lock that is still held?',
-    confirmAliveBody: (pid, surface) =>
-      `pid ${pid} (${surface}) is still running and using this session. After releasing, both clients may write to the same conversation.`,
-    confirmDeadTitle: 'Release this session lock',
-    confirmDeadBody: pid => `pid ${pid} is gone, so this lease is stale - releasing it is safe.`,
+    confirmAliveTitle: name => `Release "${name}"?`,
+    confirmAliveBody: (name, pid, surface) =>
+      `"${name}" (pid ${pid}, ${surface}) is still running and using this session. After releasing, both clients may write to the same conversation.`,
+    confirmDeadTitle: name => `Release "${name}"`,
+    confirmDeadBody: (name, pid) =>
+      `"${name}" (pid ${pid}) is gone, so this lease is stale - releasing it is safe.`,
     confirmLabel: 'Release'
   },
   zh: {
@@ -87,6 +90,8 @@ const MESSAGES = {
       '“This chat is open somewhere else” 就是这张表里的某条记录挡住的。删掉之后，任何设备或平台都能重新占用该会话。',
     loading: '读取中…',
     empty: '当前没有任何会话锁',
+    untitled: '未命名会话',
+    sessionId: id => `ID ${id}`,
     from: surface => `来源 ${surface}`,
     pid: pid => `pid ${pid}`,
     ageSeconds: n => `${n} 秒前`,
@@ -110,11 +115,12 @@ const MESSAGES = {
     confirmAllBody:
       '会把当前所有会话的锁全部删掉，不管它是哪个设备、哪个平台留下的。如果某个锁的持有进程还活着（比如另一台电脑正开着这个会话），两边可能同时写同一段对话。',
     confirmAllLabel: '全部释放',
-    confirmAliveTitle: '释放一个还活着的锁？',
-    confirmAliveBody: (pid, surface) =>
-      `pid ${pid}（${surface}）还活着并且正在使用这个会话。释放后这两个客户端可能同时往同一段对话里写。`,
-    confirmDeadTitle: '释放这个会话锁',
-    confirmDeadBody: pid => `pid ${pid} 已经不在了，这是残留的锁，释放是安全的。`,
+    confirmAliveTitle: name => `释放「${name}」？`,
+    confirmAliveBody: (name, pid, surface) =>
+      `「${name}」（pid ${pid}，来源 ${surface}）还活着并且正在使用这个会话。释放后这两个客户端可能同时往同一段对话里写。`,
+    confirmDeadTitle: name => `释放「${name}」`,
+    confirmDeadBody: (name, pid) =>
+      `「${name}」（pid ${pid}）的持有者已经不在了，这是残留的锁，释放是安全的。`,
     confirmLabel: '释放'
   }
 }
@@ -133,9 +139,13 @@ function liveness(entry, t) {
   return { label: t('unknown'), tone: 'text-(--ui-text-tertiary)' }
 }
 
-function LeaseRow({ entry, onRelease }) {
+function LeaseRow({ entry, onRelease, sessionTitles }) {
   const t = usePluginI18n(ID)
   const state = liveness(entry, t)
+  const fallbackTitle = ((sessionTitles || {})[entry.session_id] || '').trim()
+  const title = (entry.title || fallbackTitle || '').trim()
+  const hasTitle = title.length > 0
+  const primary = hasTitle ? title : entry.session_id || t('untitled')
   return jsxs('div', {
     className: 'flex items-center gap-3 border-b border-(--ui-stroke-secondary) px-1 py-2 last:border-b-0',
     children: [
@@ -144,11 +154,19 @@ function LeaseRow({ entry, onRelease }) {
         children: [
           jsx('div', {
             className: 'truncate text-xs font-medium text-foreground',
-            children: entry.session_id || '—'
+            children: primary
           }),
           jsxs('div', {
             className: 'flex flex-wrap items-center gap-x-3 text-[0.6875rem] text-(--ui-text-tertiary)',
             children: [
+              ...(hasTitle
+                ? [
+                    jsx('span', {
+                      className: 'truncate font-mono',
+                      children: t('sessionId', entry.session_id)
+                    })
+                  ]
+                : []),
               jsx('span', { children: t('from', entry.surface || '?') }),
               jsx('span', { children: t('pid', entry.pid ?? '?') }),
               jsx('span', { children: fmtAge(entry.age_seconds, t) })
@@ -173,6 +191,27 @@ function LockChip() {
     refetchInterval: 15000,
     staleTime: 4000
   })
+  // The running gateway may not have reloaded the Python half yet (it needs a
+  // desktop restart). Resolve names through the gateway's own session list so
+  // the dialog shows titles immediately; ids remain the fallback.
+  const sessionsQuery = useQuery({
+    queryKey: [ID, 'session-titles'],
+    queryFn: async () => {
+      const res = await host.request('session.list', { limit: 200, include_hidden: true })
+      const payload = res && res.sessions ? res : (res && res.result) || {}
+      const map = {}
+      for (const row of payload.sessions || []) {
+        const title = (row.title || '').trim()
+        const id = row.id || row.session_id
+        if (id && title) map[id] = title
+        if (row._lineage_root_id && title) map[row._lineage_root_id] = title
+      }
+      return map
+    },
+    refetchInterval: 60000,
+    staleTime: 30000
+  })
+  const sessionTitles = sessionsQuery.data || {}
   const queryClient = useQueryClient()
 
   const entries = query.data?.entries || []
@@ -200,12 +239,14 @@ function LockChip() {
 
   const askOne = (entry) => {
     const alive = entry.alive === true
+    const name = (entry.title || (sessionTitles[entry.session_id] || '')).trim()
+      || entry.session_id || t('untitled')
     setPending({
       payload: { scope: 'session', session_id: entry.session_id, confirm: true },
-      title: alive ? t('confirmAliveTitle') : t('confirmDeadTitle'),
+      title: alive ? t('confirmAliveTitle', name) : t('confirmDeadTitle', name),
       description: alive
-        ? t('confirmAliveBody', entry.pid, entry.surface || '?')
-        : t('confirmDeadBody', entry.pid ?? '?'),
+        ? t('confirmAliveBody', name, entry.pid, entry.surface || '?')
+        : t('confirmDeadBody', name, entry.pid ?? '?'),
       label: t('confirmLabel')
     })
   }
@@ -276,7 +317,7 @@ function LockChip() {
               : jsx('div', {
                   className: 'max-h-[45vh] overflow-y-auto',
                   children: entries.map((entry) =>
-                    jsx(LeaseRow, { entry, onRelease: askOne }, entry.lease_id || entry.session_id)
+                    jsx(LeaseRow, { entry, onRelease: askOne, sessionTitles }, entry.lease_id || entry.session_id)
                   )
                 }),
           error

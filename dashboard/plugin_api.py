@@ -91,7 +91,35 @@ def _audit(record: dict[str, Any]) -> None:
         pass
 
 
-def _describe(entry: dict[str, Any], now: float) -> dict[str, Any]:
+def _session_titles(entries: list[dict[str, Any]]) -> dict[str, str]:
+    """Resolve human session names for the lock rows.
+
+    The lease registry only stores ids; the state DB is the source of truth for the
+    title a person sees in the session list. Best effort: an unreadable/missing DB
+    must never take the lock UI down, so callers fall back to the id.
+    """
+    ids = {
+        str(entry.get("session_id") or "").strip()
+        for entry in entries
+        if str(entry.get("session_id") or "").strip()
+    }
+    if not ids:
+        return {}
+    try:
+        from hermes_state import SessionDB
+
+        with SessionDB(read_only=True) as db:
+            titles: dict[str, str] = {}
+            for sid in ids:
+                title = (db.get_session_title(sid) or "").strip()
+                if title:
+                    titles[sid] = title
+            return titles
+    except Exception:  # noqa: BLE001 - titles are cosmetic, never a failure path
+        return {}
+
+
+def _describe(entry: dict[str, Any], now: float, title: str | None = None) -> dict[str, Any]:
     pid = entry.get("pid")
     try:
         alive: bool | None = registry._pid_liveness(pid, entry.get("process_start_time"))
@@ -107,6 +135,7 @@ def _describe(entry: dict[str, Any], now: float) -> dict[str, Any]:
     return {
         "lease_id": str(entry.get("lease_id") or ""),
         "session_id": str(entry.get("session_id") or ""),
+        "title": (title or "").strip() or None,
         "surface": str(entry.get("surface") or ""),
         "pid": pid,
         "alive": alive,
@@ -122,10 +151,14 @@ def list_leases() -> dict[str, Any]:
     with registry._FileLock(_lock_path(), timeout=5):
         entries = _load(state)
     now = time.time()
+    titles = _session_titles(entries)
     return {
         "path": str(state),
         "count": len(entries),
-        "entries": [_describe(entry, now) for entry in entries],
+        "entries": [
+            _describe(entry, now, titles.get(str(entry.get("session_id") or "")))
+            for entry in entries
+        ],
     }
 
 
@@ -191,10 +224,15 @@ def release(body: ReleaseRequest) -> dict[str, Any]:
     if removed:
         _audit(record)
     now = time.time()
+    titles = _session_titles(removed + remaining)
     return {
         "ok": True,
-        "removed": [_describe(e, now) for e in removed],
-        "remaining": [_describe(e, now) for e in remaining],
+        "removed": [
+            _describe(e, now, titles.get(str(e.get("session_id") or ""))) for e in removed
+        ],
+        "remaining": [
+            _describe(e, now, titles.get(str(e.get("session_id") or ""))) for e in remaining
+        ],
         "backup": backup,
         "path": str(state),
     }

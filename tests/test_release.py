@@ -110,6 +110,7 @@ print("\n[list]")
 snap = api.list_leases()
 by_id = {entry["session_id"]: entry for entry in snap["entries"]}
 check("three leases listed", snap["count"] == 3, str(snap["count"]))
+check("title field present on every lease", all("title" in e for e in snap["entries"]))
 check("live owner reports alive=True", by_id["sess-alive"]["alive"] is True)
 check("dead pid reports alive=False", by_id["sess-dead"]["alive"] is False)
 check("recycled pid reports alive=False", by_id["sess-recycled"]["alive"] is False)

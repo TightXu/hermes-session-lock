@@ -29,14 +29,16 @@ Other systems, by hand:
 
 ## Using it
 
-The chip counts the leases. Clicking it lists them: session id, which surface opened it (`desktop`,
-`remote`, ...), pid, how long ago it was updated, and whether the owner process is still alive.
+The chip counts the leases. Clicking it lists them by session name (the same title shown in the
+session list), with the raw id as secondary text, which surface opened it (`desktop`, `remote`, ...),
+pid, how long ago it was updated, and whether the owner process is still alive.
 
 - **Release** removes one record.
 - **Clear dead only** removes records whose process is gone or whose process start time no longer
   matches. This is the safe one and needs no confirmation.
 - **Release this chat** and **Release all** can remove a record whose owner is still running. Two
-  clients can then write to the same conversation, so both ask first and name the pid involved.
+  clients can then write to the same conversation, so both ask first and name the session and pid
+  involved.
 
 Chinese and English strings ship with the plugin. The app picks one from `display.language`, which
 defaults to the OS language.

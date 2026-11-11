@@ -1,0 +1,35 @@
+session-lock 插件安装说明（Windows）
+
+1. 解压整个压缩包，不要只把 install.bat 单独拖出来。
+   解压后会得到一个 session-lock 文件夹。
+
+2. 双击：
+   session-lock\install\install.bat
+
+   脚本会自动找 Hermes home，顺序是：
+   - %HERMES_HOME%
+   - %LOCALAPPDATA%\hermes
+   - %USERPROFILE%\.hermes
+
+   如果 Hermes 装在别的位置，先打开 cmd，设置：
+       set HERMES_HOME=D:\你的\hermes
+   再运行 install\install.bat。
+
+3. 看到 CONFIG_OK=... 和 Done 后：
+   - 打开 Hermes 桌面端；
+   - 按 Ctrl+K，执行 “Reload desktop plugins”；
+   - 状态栏出现 “Locks N” 或 “锁 N” 的锁图标，点开即可查看和释放会话锁。
+
+4. 卸载：
+   session-lock\install\uninstall.bat
+   会移除两个插件目录，并从 plugins.enabled 里删掉 session-lock。
+
+说明：
+- 安装器只改 plugins.enabled 和两个插件目录，不碰 .env、会话数据、
+  active_sessions.json 或会话锁备份。
+- 修改 config.yaml 前会生成 .bak-session-lock-* 备份。
+- 插件在 Hermes v0.22.5 / Windows 11 验证。笔记本如果是 v0.21.7，
+  锁图标可能会提示 backend unavailable 或 /leases 404，这通常表示
+  该版本没有 dashboard 插件挂载；先升级 Hermes 再试，或把提示发我。
+- 会话名称显示依赖 /leases.title 或 session.list；旧版 Hermes 没有
+  title 时会退回到会话 id，不会影响释放锁。
